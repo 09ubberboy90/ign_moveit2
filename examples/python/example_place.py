@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 
+import threading
 from geometry_msgs.msg import Pose
 from moveit2 import MoveIt2Interface
 from rclpy.node import Node
 import rclpy
 import time
-
 import copy
+
+
 class Thrower(Node):
 
     def __init__(self):
@@ -14,19 +16,16 @@ class Thrower(Node):
         # Create a subscriber for object pose
         self._object_pose_sub = self.create_subscription(Pose, '/model/throwing_object/pose',
                                                          self.object_pose_callback, 1)
-
         self.timer = self.create_timer(0.1, self.timer_callback)
 
         self.pose = None
         # Create MoveIt2 interface node
         self._moveit2 = MoveIt2Interface()
         self.bool = False
-
         # Create multi-threaded executor
         self._executor = rclpy.executors.MultiThreadedExecutor(2)
         self._executor.add_node(self)
         self._executor.add_node(self._moveit2)
-
         # Wait a couple of seconds until Ignition is ready and spin up the executor
         time.sleep(2)
         self._executor.spin()
@@ -45,6 +44,7 @@ class Thrower(Node):
         self._moveit2.gripper_open()
         self._moveit2.wait_until_executed()
 
+        initial = self._moveit2.get_joint_state()
         # Move above object
         position = [object_position.x,
                     object_position.y, object_position.z + 0.1]
@@ -79,56 +79,17 @@ class Thrower(Node):
         self._moveit2.execute()
         self._moveit2.wait_until_executed()
 
-        # Move to pre-throw configuration
-        joint_positions = [0.0,
-                           -1.75,
-                           0.0,
-                           -0.1,
-                           0.0,
-                           3.6,
-                           0.8]
-        self._moveit2.set_joint_goal(joint_positions)
+        # move to new position
+        position = [object_position.x+0.2,
+                    object_position.y, object_position.z]
+        quaternion = [1.0, 0.0, 0.0, 0.0]
+        self._moveit2.set_pose_goal(position, quaternion)
         self._moveit2.plan_kinematic_path()
         self._moveit2.execute()
         self._moveit2.wait_until_executed()
 
-        # Throw
-        self._moveit2.set_max_velocity(1.0)
-        self._moveit2.set_max_acceleration(1.0)
-
-        # Arm trajectory
-        joint_positions = [0.0,
-                           1.0,
-                           0.0,
-                           -1.1,
-                           0.0,
-                           1.9,
-                           0.8]
-        self._moveit2.set_joint_goal(joint_positions)
-        trajectory = self._moveit2.plan_kinematic_path(
-        ).motion_plan_response.trajectory.joint_trajectory
-
-        # Hand opening trajectory
-        hand_trajectory = self._moveit2.gripper_plan_path(0.08, 0.2)
-
-        # Merge hand opening into arm trajectory, such that it is timed for release (at 50%)
-        release_index = round(0.5*len(trajectory.points))
-        for finger_joint in hand_trajectory.joint_names:
-            trajectory.joint_names.append(finger_joint)
-        while len(trajectory.points[release_index].effort) < 9:
-            trajectory.points[release_index].effort.append(0.0)
-        for finger_index in range(2):
-            trajectory.points[release_index].positions.append(
-                hand_trajectory.points[-1].positions[finger_index])
-            trajectory.points[release_index].velocities.append(
-                hand_trajectory.points[-1].velocities[finger_index])
-            trajectory.points[release_index].accelerations.append(
-                hand_trajectory.points[-1].accelerations[finger_index])
-        
-        self._moveit2.execute(trajectory)
+        self._moveit2.gripper_open()
         self._moveit2.wait_until_executed()
-        # Move to default position
-        self.get_logger().info("Default")
 
         joint_positions = [0.0,
                            0.0,
@@ -140,14 +101,14 @@ class Thrower(Node):
         self._moveit2.set_joint_goal(joint_positions)
         self._moveit2.plan_kinematic_path()
         self._moveit2.execute()
-
-        self.get_logger().info("Done")
+        self._moveit2.wait_until_executed()
         new_pose = self.pose
-        if (new_pose.x < object_position.x) or (object_position.y + 0.1 < new_pose.y) or (object_position.y - 0.1 > new_pose.y):
+        if ((new_pose.x < object_position.x - 0.05) or (object_position.x + 0.05 < new_pose.x)):
             self.get_logger().info("Cube is not in bound")
         else:
             self.get_logger().info("Task completed Succesfully")
-        
+
+
 def main(args=None):
     rclpy.init(args=args)
 
